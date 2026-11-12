@@ -45,6 +45,7 @@ export default function App() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { window.scrollTo({ top: 0, behavior: "auto" }); }, [page]);
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(""), 6000);
