@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api, errorMessage, skillFields } from "./api";
 import { categoryClass } from "./Chat";
 import { ErrorNotice, Modal, SkillForm, Spinner } from "./components";
-import type { Skill, SkillFields, SkillMetadata } from "./types";
+import type { Proposal, Skill, SkillFields, SkillHistory, SkillMetadata } from "./types";
 
 const emptySkill: SkillFields = { name: "", description: "", category: "General", guidance: "" };
 
@@ -26,7 +26,7 @@ export function SkillsPage({ skills, selectedId, clearSelection, refresh, notify
       <div className="skill-card-bottom"><span><Clock3 size={13} />{new Date(skill.updated_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span><span>View skill <ArrowUpRight size={15} /></span></div>
     </button>)}</div>
     {!visible.length && <div className="empty-panel"><BookOpen size={30} /><h3>{skills.length ? "No skills match that search." : "Your library starts here."}</h3><p>{skills.length ? "Try a different name, category, or keyword." : "Create a skill or turn expert notes into a reviewed proposal."}</p></div>}
-    <div className="library-tip"><span><Plus size={18} /></span><div><strong>Keep the knowledge. Skip the reindexing.</strong><p>Every saved edit increments the skill version. Agents get the latest published guidance on their next load.</p></div><ArrowRight size={20} /></div>
+    <div className="library-tip"><span><Plus size={18} /></span><div><strong>Review first. Publish deliberately.</strong><p>Saved edits become review drafts. Approved releases reach agents on their next load; older releases remain available for review and rollback.</p></div><ArrowRight size={20} /></div>
     {editing && <SkillEditor key={editing} id={editing} onClose={() => { setEditing(null); clearSelection(); }} onChanged={async (message) => { await refresh(); notify(message); setEditing(null); clearSelection(); }} />}
   </>;
 }
@@ -39,12 +39,13 @@ function SkillEditor({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [history, setHistory] = useState<SkillHistory | null>(null);
 
   useEffect(() => {
     if (id === "new") return;
     let active = true;
-    api<Skill>(`/api/skills/${encodeURIComponent(id)}`).then((current) => {
-      if (active) { setSkill(current); setValue(skillFields(current)); }
+    Promise.all([api<Skill>(`/api/skills/${encodeURIComponent(id)}`), api<SkillHistory>(`/api/skills/${encodeURIComponent(id)}/history`)]).then(([current, releases]) => {
+      if (active) { setSkill(current); setValue(skillFields(current)); setHistory(releases); }
     }).catch((failure) => { if (active) setError(errorMessage(failure)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [id]);
@@ -53,9 +54,9 @@ function SkillEditor({ id, onClose, onChanged }: { id: string; onClose: () => vo
     setBusy(true); setError("");
     try {
       const saved = skill
-        ? await api<Skill>(`/api/skills/${encodeURIComponent(skill.id)}`, "PUT", { ...value, expected_version: skill.version })
-        : await api<Skill>("/api/skills", "POST", value);
-      await onChanged(`${saved.name} v${saved.version} is published and available to runtime loads.`);
+        ? await api<Proposal>(`/api/skills/${encodeURIComponent(skill.id)}`, "PUT", { ...value, expected_version: skill.version })
+        : await api<Proposal>("/api/skills", "POST", value);
+      await onChanged(`${saved.name} is a draft. Open Expert intake > Review queue to approve it.`);
     } catch (failure) { setError(errorMessage(failure)); }
     finally { setBusy(false); }
   }
@@ -65,7 +66,20 @@ function SkillEditor({ id, onClose, onChanged }: { id: string; onClose: () => vo
     setBusy(true); setError("");
     try {
       await api(`/api/skills/${encodeURIComponent(skill.id)}?expected_version=${skill.version}`, "DELETE");
-      await onChanged("Skill deleted. Future runtime loads will report it as unavailable.");
+      await onChanged("Retirement proposed. Review and approve it in Expert intake. Published guidance is unchanged.");
+    } catch (failure) { setError(errorMessage(failure)); }
+    finally { setBusy(false); }
+  }
+
+  async function rollback(version: number) {
+    if (!skill) return;
+    setBusy(true); setError("");
+    try {
+      await api(`/api/skills/${encodeURIComponent(skill.id)}/actions`, "POST", {
+        action: "rollback", target_version: version, expected_version: skill.version,
+        reason: `Restore previously approved guidance from release v${version}.`,
+      });
+      await onChanged("Rollback proposed. Review its diff and approve in Expert intake.");
     } catch (failure) { setError(errorMessage(failure)); }
     finally { setBusy(false); }
   }
@@ -75,13 +89,21 @@ function SkillEditor({ id, onClose, onChanged }: { id: string; onClose: () => vo
       <div className="modal-body">
         {error && <ErrorNotice message={error} />}
         {(skill || id === "new") && <>
-          <div className="notice info"><BookOpen size={17} /><span>Saving here publishes directly. For agent-assisted drafts and approval, use Expert intake.</span></div>
+          <div className="notice info"><BookOpen size={17} /><span>Saving creates a draft for explicit approval in Expert intake. Runtime guidance does not change until approval.</span></div>
           <SkillForm value={value} onChange={setValue} disabled={busy} preview={preview} setPreview={setPreview} />
           {skill && <div className="stable-id"><span>Stable skill ID</span><code>{skill.id}</code></div>}
-          {confirmDelete && <div className="delete-confirm"><strong>Delete this published skill?</strong><p>This removes it from discovery and future loads. Existing conversation text is not erased. Pending update proposals will become stale.</p><div><button type="button" className="button danger" disabled={busy} onClick={() => void remove()}>Delete permanently</button><button type="button" className="button secondary" disabled={busy} onClick={() => setConfirmDelete(false)}>Keep skill</button></div></div>}
+          {history && <details className="published-comparison"><summary>Release history and rollback</summary>
+            {history.releases.map((release) => <div key={release.version} className="notice info"><span><strong>v{release.version}</strong> / {release.origin} / {release.reviewer_label}<br /><code>{release.digest}</code></span>
+              {release.approved && release.version !== skill?.version && <button className="button secondary" type="button" disabled={busy} onClick={() => void rollback(release.version)}>Propose rollback</button>}
+            </div>)}
+            {history.events.map((event) => <p key={event.id} className="fine-print">{event.at} / {event.action} {event.version ? `v${event.version}` : ""} / {event.reviewer_label ?? "System"}</p>)}
+            <p className="fine-print">Reviewer labels are unverified. This private demo has no end-user sign-in.</p>
+            {skill && <a className="button secondary" href={`/api/skills/${encodeURIComponent(skill.id)}/package`}>Download portable package</a>}
+          </details>}
+          {confirmDelete && <div className="delete-confirm"><strong>Propose retiring this skill?</strong><p>Only approval removes it from discovery. Releases and evidence remain preserved.</p><div><button type="button" className="button danger" disabled={busy} onClick={() => void remove()}>Propose retirement</button><button type="button" className="button secondary" disabled={busy} onClick={() => setConfirmDelete(false)}>Keep skill</button></div></div>}
         </>}
       </div>
-      <footer className="modal-footer">{skill ? <button className="text-button danger-text" type="button" disabled={busy} onClick={() => setConfirmDelete(true)}><Trash2 size={16} />Delete skill</button> : <span className="fine-print">Published immediately on save.</span>}<div><button className="button secondary" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy || (id !== "new" && !skill)}>{busy ? <Spinner label="Saving..." /> : <><Check size={16} />{skill ? "Publish changes" : "Publish skill"}</>}</button></div></footer>
+      <footer className="modal-footer">{skill ? <button className="text-button danger-text" type="button" disabled={busy} onClick={() => setConfirmDelete(true)}><Trash2 size={16} />Retire skill</button> : <span className="fine-print">Draft only until explicit review.</span>}<div><button className="button secondary" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy || (id !== "new" && !skill)}>{busy ? <Spinner label="Saving..." /> : <><Check size={16} />Save review draft</>}</button></div></footer>
     </form>}
   </Modal>;
 }

@@ -163,6 +163,7 @@ async def test_authoring_inspects_existing_skill_and_creates_review_only_proposa
         "action": "update", "skill_id": existing.id, "base_version": 1,
         "rationale": "Update the approval route using the new Finance workshop notes.",
         "evidence": [notes], "missing_information": ["No approval SLA was supplied."],
+        "rules": [{"rule": "Finance approval is required regardless of price.", "quotes": [notes]}],
     }
     service = ScriptedService([
         call("catalog", "discover_skills", {}),

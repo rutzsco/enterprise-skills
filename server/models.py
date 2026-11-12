@@ -12,6 +12,9 @@ class SkillInput(StrictModel):
     description: str = Field(min_length=8, max_length=400)
     category: str = Field(default="General", min_length=2, max_length=40)
     guidance: str = Field(min_length=20, max_length=16000)
+    owner: str = Field(default="Unassigned", min_length=2, max_length=100)
+    applicability: str = Field(default="Review applicability before use.", min_length=2, max_length=500)
+    references: dict[str, str] = Field(default_factory=dict, max_length=10)
 
 
 class SkillEdit(SkillInput):
@@ -25,7 +28,12 @@ class Skill(SkillInput):
     updated_at: str
 
     def metadata(self) -> dict:
-        return self.model_dump(exclude={"guidance"})
+        return self.model_dump(exclude={"guidance", "references"})
+
+
+class RuleEvidence(StrictModel):
+    rule: str = Field(min_length=5, max_length=1000)
+    quotes: list[Annotated[str, Field(min_length=1, max_length=2000)]] = Field(min_length=1, max_length=6)
 
 
 class NotesInput(StrictModel):
@@ -44,6 +52,7 @@ class ProposalCandidate(SkillInput):
     missing_information: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(
         default_factory=list, max_length=10
     )
+    rules: list[RuleEvidence] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
     def validate_target(self) -> "ProposalCandidate":
@@ -67,6 +76,14 @@ class ProposalEdit(SkillInput):
 
 class ReviewRequest(StrictModel):
     expected_revision: int = Field(strict=True, ge=1)
+    reviewer_label: str = Field(default="Trusted demo reviewer (unverified)", min_length=2, max_length=100)
+
+
+class ReleaseAction(StrictModel):
+    action: Literal["rollback", "retire"]
+    expected_version: int = Field(strict=True, ge=1)
+    target_version: int | None = Field(default=None, strict=True, ge=1)
+    reason: str = Field(min_length=10, max_length=1000)
 
 
 class ChatInput(StrictModel):

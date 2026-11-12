@@ -55,6 +55,10 @@ def test_validation_storage_errors_and_conflicts_are_visible(tmp_path, monkeypat
         edited = {key: skill[key] for key in ("name", "description", "category", "guidance")}
         response = client.put(f"/api/skills/{skill['id']}", json={**edited, "expected_version": 1})
         assert response.status_code == 200
+        draft = response.json()
+        assert draft["status"] == "pending"
+        assert client.get(f"/api/skills/{skill['id']}").json()["version"] == 1
+        assert client.post(f"/api/proposals/{draft['id']}/approve", json={"expected_revision": draft["revision"]}).status_code == 200
         assert client.put(f"/api/skills/{skill['id']}", json={**edited, "expected_version": 1}).status_code == 409
         assert client.get("/api/runtime/skills/deleted").status_code == 404
         assert client.post("/api/skills", headers={"Origin": "https://not-local.example"}, json=edited).status_code == 403

@@ -85,7 +85,7 @@ export function IntakePage({ status, intakes, proposals, refresh, notify, onSetu
     </> : <>
       <div className="queue-heading"><p><strong>{pending.length} proposals</strong> awaiting human review</p><label className="checkbox-label"><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />Show approved and rejected</label></div>
       {visibleProposals.length ? <div className="proposal-grid">{visibleProposals.map((proposal) => <button key={proposal.id} className="proposal-card" onClick={() => setSelectedProposal(proposal.id)}>
-        <div><span className={`pill ${proposal.action === "create" ? "green" : "blue"}`}>{proposal.action === "create" ? "New skill" : `Update v${proposal.base_version}`}</span><span className="proposal-status">{proposal.status === "pending" ? "Not published" : proposal.status}</span></div>
+        <div><span className={`pill ${proposal.action === "create" ? "green" : "blue"}`}>{proposal.action === "create" ? "New skill" : `${proposal.action} v${proposal.base_version}`}</span><span className="proposal-status">{proposal.status === "pending" ? "Not published" : proposal.status}</span></div>
         <h2>{proposal.name}</h2><p>{proposal.rationale}</p>
         {proposal.conflict && <span className="conflict-label"><AlertCircle size={14} />Published version changed</span>}
         {!proposal.conflict && proposal.missing_information.length > 0 && <span className="gap-label"><AlertCircle size={14} />{proposal.missing_information.length} information gaps flagged</span>}
@@ -126,6 +126,7 @@ function ProposalEditor({ id, onClose, onChanged }: { id: string; onClose: () =>
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [diff, setDiff] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -134,7 +135,11 @@ function ProposalEditor({ id, onClose, onChanged }: { id: string; onClose: () =>
         const result = await api<Proposal>(`/api/proposals/${id}`);
         if (!active) return;
         setProposal(result); setValue(skillFields(result)); setGaps(result.missing_information.join("\n"));
-        if (result.skill_id) {
+        if (result.status === "pending") {
+          const change = await api<{ diff: string }>(`/api/proposals/${id}/diff`);
+          if (active) setDiff(change.diff);
+        }
+        if (result.skill_id && result.status === "pending") {
           const target = await api<Skill>(`/api/skills/${encodeURIComponent(result.skill_id)}`);
           if (active) setCurrent(target);
         }
@@ -147,6 +152,7 @@ function ProposalEditor({ id, onClose, onChanged }: { id: string; onClose: () =>
 
   const dirty = proposal && value && (JSON.stringify(value) !== JSON.stringify(skillFields(proposal)) || gaps.trim() !== proposal.missing_information.join("\n"));
   const closed = proposal?.status !== "pending";
+  const releaseAction = proposal?.action === "rollback" || proposal?.action === "retire";
 
   async function saveDraft() {
     if (!proposal || !value) return;
@@ -154,6 +160,7 @@ function ProposalEditor({ id, onClose, onChanged }: { id: string; onClose: () =>
     try {
       const updated = await api<Proposal>(`/api/proposals/${id}`, "PUT", { ...value, expected_revision: proposal.revision, missing_information: gaps.split("\n").map((item) => item.trim()).filter(Boolean) });
       setProposal(updated); setValue(skillFields(updated)); setGaps(updated.missing_information.join("\n"));
+      setDiff((await api<{ diff: string }>(`/api/proposals/${id}/diff`)).diff);
       await onChanged("Draft saved. The published library is unchanged.", false);
     } catch (failure) { setError(errorMessage(failure)); }
     finally { setBusy(false); }
@@ -178,9 +185,11 @@ function ProposalEditor({ id, onClose, onChanged }: { id: string; onClose: () =>
           {proposal.conflict && <ErrorNotice message={proposal.conflict} />}
           <div className="proposal-rationale"><span className="tiny-label">WHY THIS CHANGE</span><p>{proposal.rationale}</p></div>
           <details className="evidence" open><summary>Evidence from the expert notes <span>{proposal.evidence.length} excerpts</span></summary>{proposal.evidence.map((quote, index) => <blockquote key={index}>{quote}</blockquote>)}</details>
+          {proposal.rules?.map((rule, index) => <details className="evidence" key={index}><summary>Rule {index + 1}: {rule.rule}</summary>{rule.quotes.map((quote, quoteIndex) => <blockquote key={quoteIndex}>{quote}</blockquote>)}</details>)}
+          {!closed && <details className="published-comparison" open><summary>Exact guidance diff {proposal.target_version ? `(target v${proposal.target_version})` : ""}</summary><pre className="response-code">{diff || "No instruction text changes."}</pre></details>}
           {current && <details className="published-comparison"><summary>Compare with published guidance <span>Current v{current.version}</span></summary><MarkdownText>{current.guidance}</MarkdownText></details>}
-          <SkillForm value={value} onChange={setValue} disabled={busy || closed} preview={preview} setPreview={setPreview} />
-          <label className="gaps-field">Missing information <span className="field-help">One unanswered question per line. Do not invent a policy to fill a gap.</span><textarea rows={3} value={gaps} disabled={busy || closed} onChange={(event) => setGaps(event.target.value)} placeholder="No gaps flagged by the agent. Review the source carefully." /></label>
+          {!releaseAction && <SkillForm value={value} onChange={setValue} disabled={busy || closed} preview={preview} setPreview={setPreview} />}
+          {!releaseAction && <label className="gaps-field">Missing information <span className="field-help">One unanswered question per line. Do not invent a policy to fill a gap.</span><textarea rows={3} value={gaps} disabled={busy || closed} onChange={(event) => setGaps(event.target.value)} placeholder="No gaps flagged by the agent. Review the source carefully." /></label>}
           {dirty && !closed && <p className="unsaved-note"><AlertCircle size={14} />Save your draft edits before approving.</p>}
         </>}
       </div>

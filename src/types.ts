@@ -3,6 +3,9 @@ export interface SkillFields {
   description: string;
   category: string;
   guidance: string;
+  owner?: string;
+  applicability?: string;
+  references?: Record<string, string>;
 }
 
 export interface SkillMetadata extends Omit<SkillFields, "guidance"> {
@@ -25,6 +28,7 @@ export interface ServiceStatus {
   model_deployment: string | null;
   published_skills: number;
   pending_proposals: number;
+  storage_backend: "sqlite" | "azure";
 }
 
 export interface ToolEvent {
@@ -57,7 +61,7 @@ export interface IntakeSummary {
 export interface Proposal extends SkillFields {
   id: string;
   intake_id: string;
-  action: "create" | "update";
+  action: "create" | "update" | "retire" | "rollback";
   skill_id: string | null;
   base_version: number | null;
   rationale: string;
@@ -67,6 +71,15 @@ export interface Proposal extends SkillFields {
   revision: number;
   conflict: string | null;
   published_skill_id: string | null;
+  published_version?: number;
+  target_version?: number;
+  rules?: { rule: string; quotes: string[] }[];
+}
+
+export interface SkillHistory {
+  active: SkillMetadata & { retired: boolean };
+  releases: (SkillMetadata & { approved: boolean; origin: string; digest: string; reviewer_label: string })[];
+  events: { id: string; at: string; action: string; version?: number; reviewer_label?: string }[];
 }
 
 export interface Intake extends Omit<IntakeSummary, "pending_count"> {

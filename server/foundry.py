@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import anyio
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
 
@@ -28,6 +29,7 @@ class FoundryService:
         self._project: AIProjectClient | None = None
         self._clients: dict[AgentKind, RawFoundryAgentChatClient] = {}
         self._openai = None
+        self.identities: dict[AgentKind, dict] = {}
 
     async def _client(self, kind: AgentKind) -> RawFoundryAgentChatClient:
         async with self._lock:
@@ -60,7 +62,7 @@ class FoundryService:
                 "instructions": instructions,
                 "tools": schemas,
             }, sort_keys=True).encode()).hexdigest()
-            binding = self.store.get_agent_binding(definition_key)
+            binding = await anyio.to_thread.run_sync(self.store.get_agent_binding, definition_key)
             agent = None
             if binding:
                 try:
@@ -75,13 +77,14 @@ class FoundryService:
                     agent_name=f"{self.settings.agent_prefix}-{kind}",
                     definition=definition,
                 )
-                self.store.save_agent_binding(definition_key, agent.name, agent.version)
+                await anyio.to_thread.run_sync(self.store.save_agent_binding, definition_key, agent.name, agent.version)
             client = RawFoundryAgentChatClient(
                 project_client=self._project,
                 agent_name=agent.name,
                 agent_version=agent.version,
                 timeout=40,
             )
+            self.identities[kind] = {"name": agent.name, "version": agent.version}
             await self._stack.enter_async_context(client)
             self._clients[kind] = client
             return client

@@ -10,6 +10,7 @@ from .config import Settings
 from .errors import AppError
 from .store import Store
 from .tools import ToolDispatcher
+import anyio
 
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ class Runtime:
                     raise AppError("INVALID_TOOL_CALL", "Foundry repeated or omitted a tool call ID. The run was stopped.", 502)
                 seen_calls.add(call.call_id)
                 call_count += 1
-                output = tools.execute(call.call_id, call.name, call.arguments)
+                output = await anyio.to_thread.run_sync(tools.execute, call.call_id, call.name, call.arguments)
                 inputs.append({"type": "function_call_output", "call_id": call.call_id, "output": output})
         raise AppError("TOOL_LIMIT", "The agent reached the 6-round safety limit without a final answer. Try a narrower request.", 502)
 
@@ -159,7 +160,7 @@ class Runtime:
 
     async def organize(self, intake_id: str) -> dict:
         self.require_configuration()
-        intake = self.store.claim_intake(intake_id)
+        intake = await anyio.to_thread.run_sync(self.store.claim_intake, intake_id)
         tools = ToolDispatcher(self.store, notes=intake["notes"])
         try:
             async with asyncio.timeout(TURN_TIMEOUT_SECONDS):
@@ -173,10 +174,10 @@ class Runtime:
                 )
                 if not tools.candidates:
                     raise AppError("NO_PROPOSALS", "The agent did not submit valid skill proposals. Your notes are saved; try making the rules more specific.", 502)
-                result = self.store.finish_intake(intake_id, tools.candidates, tools.events)
+                result = await anyio.to_thread.run_sync(self.store.finish_intake, intake_id, tools.candidates, tools.events)
             self.connection_state = "verified"
             return result
         except Exception as error:
             failure = self._service_error(error, tools, reset_required=False)
-            self.store.fail_intake(intake_id, failure.message, tools.events)
+            await anyio.to_thread.run_sync(self.store.fail_intake, intake_id, failure.message, tools.events)
             raise failure from error

@@ -9,16 +9,22 @@ param(
 
     [ValidatePattern('^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$')]
     [ValidateLength(2, 32)]
-    [string] $AppName = 'enterprise-skills',
+    [string] $AppName = 'enterprise-skills-private',
 
+    [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
-    [string] $ContainerImage = 'mcr.microsoft.com/k8se/quickstart:latest',
+    [string] $ContainerImage,
 
-    [ValidateRange(1, 65535)]
-    [int] $TargetPort = 80,
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [string] $ModelDeployment,
 
     [string] $Location,
-    [string] $FoundryLocation,
+    [string] $FoundryName,
+    [string] $FoundryProjectName,
+    [string] $VnetAddressPrefix,
+    [string] $AppSubnetPrefix,
+    [string] $EndpointsSubnetPrefix,
     [switch] $Preview
 )
 
@@ -46,7 +52,7 @@ $null = Invoke-AzureCli -Arguments @(
 )
 
 if (-not $Preview) {
-    foreach ($namespace in @('Microsoft.App', 'Microsoft.OperationalInsights', 'Microsoft.CognitiveServices')) {
+    foreach ($namespace in @('Microsoft.App', 'Microsoft.OperationalInsights', 'Microsoft.CognitiveServices', 'Microsoft.Network', 'Microsoft.Storage', 'Microsoft.DocumentDB', 'Microsoft.ManagedIdentity')) {
         $state = Invoke-AzureCli -Arguments @(
             'provider', 'show', '--subscription', $SubscriptionId,
             '--namespace', $namespace, '--query', 'registrationState', '--output', 'tsv'
@@ -64,13 +70,17 @@ if (-not $Preview) {
 $parameters = @(
     "appName=$AppName"
     "containerImage=$ContainerImage"
-    "targetPort=$TargetPort"
+    "modelDeployment=$ModelDeployment"
 )
 if ($Location) {
     $parameters += "location=$Location"
 }
-if ($FoundryLocation) {
-    $parameters += "foundryLocation=$FoundryLocation"
+foreach ($option in @('FoundryName', 'FoundryProjectName', 'VnetAddressPrefix', 'AppSubnetPrefix', 'EndpointsSubnetPrefix')) {
+    $value = Get-Variable -Name $option -ValueOnly
+    if ($value) {
+        $parameterName = $option.Substring(0, 1).ToLowerInvariant() + $option.Substring(1)
+        $parameters += "$parameterName=$value"
+    }
 }
 
 $action = if ($Preview) { 'what-if' } else { 'create' }

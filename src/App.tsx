@@ -64,7 +64,7 @@ export default function App() {
         <span className="brand-mark"><Layers3 size={24} strokeWidth={1.7} /></span>
         <span>enterprise<span className="brand-second">memory<span className="brand-dot">.</span></span></span>
       </button>
-      <div className="workspace-label"><span className="workspace-avatar">EM</span><div>Demo workspace<small>Local, single-user</small></div><PanelLeftClose size={14} /></div>
+      <div className="workspace-label"><span className="workspace-avatar">EM</span><div>Demo workspace<small>{status?.storage_backend === "azure" ? "Private Azure / trusted access" : "Local, single-user"}</small></div><PanelLeftClose size={14} /></div>
       <p className="nav-heading">WORKSPACE</p>
       <nav aria-label="Workspace navigation">{navigation.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${page === id ? "active" : ""}`} aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}>
         <Icon size={18} /><span>{label}</span>
@@ -91,7 +91,7 @@ export default function App() {
           {page === "runtime" && <RuntimePage skills={skills} />}
         </>}
       </div>
-      <footer className="workspace-footer"><span>Expert knowledge. Discoverable. Loadable. Reviewable.</span><span>Local storage <span className="footer-dot" /> Azure-powered agents</span></footer>
+      <footer className="workspace-footer"><span>Expert knowledge. Discoverable. Loadable. Reviewable.</span><span>{status?.storage_backend === "azure" ? "Private Blob + Cosmos DB" : "Local SQLite"} <span className="footer-dot" /> Azure-powered agents</span></footer>
     </main>
     {notice && <div className="toast" role="status"><ShieldCheck size={17} />{notice}<button className="icon-button" aria-label="Dismiss notification" onClick={() => setNotice("")}>x</button></div>}
     {setupOpen && status && <SetupDialog status={status} onClose={() => setSetupOpen(false)} refresh={refresh} />}

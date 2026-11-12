@@ -59,6 +59,8 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The operation failed. Please try again.";
 }
 
-export function skillFields(value: { name: string; description: string; category: string; guidance: string }) {
-  return { name: value.name, description: value.description, category: value.category, guidance: value.guidance };
+export function skillFields(value: import("./types").SkillFields) {
+  return { name: value.name, description: value.description, category: value.category, guidance: value.guidance,
+    owner: value.owner ?? "Unassigned", applicability: value.applicability ?? "Review applicability before use.",
+    references: value.references ?? {} };
 }

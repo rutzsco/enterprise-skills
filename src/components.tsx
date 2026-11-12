@@ -65,6 +65,8 @@ export function SkillForm({ value, onChange, disabled = false, preview, setPrevi
       <label>Category<input required minLength={2} maxLength={40} disabled={disabled} value={value.category} placeholder="e.g. Operations" onChange={(event) => onChange({ ...value, category: event.target.value })} /></label>
     </div>
     <label>Description<textarea required minLength={8} maxLength={400} rows={2} disabled={disabled} value={value.description} placeholder="When should an agent use this expertise?" onChange={(event) => onChange({ ...value, description: event.target.value })} /><span className="field-help">Used for discovery. Keep the decision rules in the guidance below.</span></label>
+    <label>Owner<input minLength={2} maxLength={100} disabled={disabled} value={value.owner ?? "Unassigned"} onChange={(event) => onChange({ ...value, owner: event.target.value })} /></label>
+    <label>Applicability<textarea minLength={2} maxLength={500} rows={2} disabled={disabled} value={value.applicability ?? "Review applicability before use."} onChange={(event) => onChange({ ...value, applicability: event.target.value })} /></label>
     <div className="guidance-heading"><label htmlFor="skill-guidance">Markdown guidance</label><div className="segmented small">
       <button type="button" className={!preview ? "selected" : ""} onClick={() => setPreview(false)}>Write</button>
       <button type="button" className={preview ? "selected" : ""} onClick={() => setPreview(true)}>Preview</button>
@@ -95,7 +97,7 @@ export function SetupDialog({ status, onClose, refresh }: { status: ServiceStatu
         <li><strong>Sign in and restart the API server</strong><pre>{`az login\npython -m uvicorn server.main:app --host 127.0.0.1 --port 8000`}</pre><p>The server uses DefaultAzureCredential and Microsoft Agent Framework with registered Foundry agents. There is no simulated chat fallback.</p></li>
       </ol>
       {!!status.problems.length && <div className="setup-checks">{status.problems.map((problem) => <p key={problem}><AlertCircle size={15} />{problem}</p>)}</div>}
-      <p className="fine-print">Only use synthetic data for this demo. Chat, SME notes, discovered metadata, and loaded guidance are sent to your configured Azure project. This local app has no user authentication.</p>
+      <p className="fine-print">Only use synthetic data for this demo. Chat, SME notes, discovered metadata, and loaded guidance are sent to your configured Azure project. There is no end-user authentication: use loopback locally or trusted private Azure access.</p>
     </div>
     <footer className="modal-footer"><a href="https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/function-calling" target="_blank" rel="noreferrer">Official Foundry guide <ArrowRight size={14} /></a><button className="button primary" onClick={() => void refresh()}>Refresh status</button></footer>
   </Modal>;
