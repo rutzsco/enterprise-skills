@@ -29,6 +29,58 @@ On macOS/Linux, use `.venv/bin/python` in place of `.\.venv\Scripts\python.exe`.
 
 For frontend development, run the API command above plus `npm run dev` in a second terminal. Vite serves **http://127.0.0.1:5173** and proxies `/api` to port 8000. Rebuild and restart the API when switching back to the production bundle. Use one API process/worker.
 
+## Run with Docker
+
+Docker builds the React frontend and packages it with the Python API in one image.
+Only Docker is required on the host; the runtime runs as a non-root user with one API worker.
+
+```powershell
+docker build -t enterprise-skills:local .
+docker volume create enterprise-skills-data
+docker run --rm --name enterprise-skills -p 127.0.0.1:8000:8000 --mount source=enterprise-skills-data,target=/app/data enterprise-skills:local
+```
+
+Open **http://127.0.0.1:8000**. Keep the loopback-only port mapping: this demo has no
+authentication. Inside the container the server listens on `0.0.0.0:8000` so Docker
+can forward traffic; this does not make it safe to expose publicly.
+The image includes a health check against `/api/status`.
+
+The named volume preserves skills, notes, proposals, and agent bindings across
+container replacements. Do not remove it unless you intend to reset that data.
+If overriding `MEMORY_DB_PATH`, mount persistent writable storage at that path;
+bind-mounted directories must be writable by container UID/GID `10001`.
+Environment files, local databases, Git metadata, and infrastructure files are
+excluded from the build context.
+
+To enable Foundry, copy `.env.example` to `.env`, configure the project and model,
+and add `--env-file .env` before the image name in the run command.
+Host-side `az login` credentials are not automatically available in the container.
+Provide credentials through the standard `DefaultAzureCredential` environment
+variables (such as `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET`)
+or a supported managed identity; never bake credentials into the image.
+
+### GitHub Container Registry
+
+The [container workflow](.github/workflows/container.yml) builds and smoke-tests
+the frontend and API for pull requests to `main`. Pushes to `main`, `v*` tags, and
+manual runs also publish to **`ghcr.io/rutzsco/enterprise-skills`** using the built-in
+`GITHUB_TOKEN` with `packages: write`; no registry password secret is needed.
+Main builds publish `latest` and `main`, tag builds preserve the tag (for example
+`v1.0.0`), and each build receives a `sha-<short-commit>` tag.
+The image's source label links the package to this repository.
+
+After the workflow has published an image, replace `enterprise-skills:local` in
+the run command above with `ghcr.io/rutzsco/enterprise-skills:latest`.
+Packages may initially be private. For unauthenticated pulls, change the package
+visibility to public in its GitHub package settings. Otherwise authenticate with
+`docker login ghcr.io` using a token with `read:packages` and access to the package.
+Publishing the package does not deploy the application.
+
+Azure Container Apps and Azure AI Foundry deployment templates and PowerShell
+scripts are in [infra](infra/README.md). Those templates are separate from this
+local-only app; publishing an image does not add authentication or make the app
+ready for public ingress.
+
 ## Connect real Foundry agents
 
 Use an **existing Microsoft Foundry project** with a deployed model that supports function calling. This app does not provision Azure infrastructure.
