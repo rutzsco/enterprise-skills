@@ -1,6 +1,6 @@
 # Enterprise Memory
 
-A hackathon MVP that turns expert knowledge into reviewed, portable skills an agent can discover and load **at runtime**. Run locally with SQLite or deploy behind private Azure ingress with private Blob Storage and Cosmos DB.
+A hackathon MVP that turns expert knowledge into reviewed, portable skills an agent can discover and load **at runtime**. Run locally with SQLite or deploy to a VNet-connected Azure environment with private Blob Storage and Cosmos DB.
 
 - **Demo chat:** a registered Azure / Microsoft Foundry prompt agent chooses read-only discovery and loading tools. Answers show the actual tool calls and loaded skill versions.
 - **Skill library:** create/edit drafts, explicit review, immutable releases, reviewed retirement and rollback, and portable `SKILL.md` package downloads.
@@ -70,17 +70,16 @@ Main builds publish `latest` and `main`, tag builds preserve the tag (for exampl
 The image's source label links the package to this repository.
 
 After the workflow has published an image, replace `enterprise-skills:local` in
-the run command above with `ghcr.io/rutzsco/enterprise-skills:latest`.
-Packages may initially be private. For unauthenticated pulls, change the package
-visibility to public in its GitHub package settings. Otherwise authenticate with
+the run command above with a versioned image such as `ghcr.io/rutzsco/enterprise-skills:sha-23fecf5`.
+Private packages require authentication with
 `docker login ghcr.io` using a token with `read:packages` and access to the package.
 Publishing the package does not deploy the application.
 
-The [private Azure deployment](infra/README.md) connects the real image to an existing Foundry project and private Blob/Cosmos endpoints through managed identity. Publishing an image does not deploy it or add user authentication. Never expose this app through public ingress.
+The [VNet-connected Azure deployment](infra/README.md) defaults to that commit image and connects it to private Blob, Cosmos, and Foundry endpoints through managed identity. App ingress is internal by default; `-PublicIngress -AllowedIngressIpRanges '<your-public-IPv4>/32'` opts into public HTTPS restricted to approved client IPs. Public GHCR images are pulled anonymously; optional private-image credentials use an approved Key Vault reference. Infrastructure-only deployment can provision private services without deploying the app. Publishing an image does not deploy it or add user authentication. Never expose this app to unrestricted public traffic.
 
 ## Connect real Foundry agents
 
-Use an **existing Microsoft Foundry project** with a deployed model that supports function calling. The application does not provision infrastructure; the separate private deployment template provisions networking, storage, and ACA, not the model.
+Use an **existing Microsoft Foundry project** with a deployed model that supports function calling. The application does not provision infrastructure; the separate Azure deployment template provisions networking, storage, and ACA, not the model.
 
 1. Copy `.env.example` to `.env`.
 2. Set these server-side values:
@@ -158,7 +157,7 @@ Start the app, publish a reviewed revision to the synthetic software-purchasing 
   --output data\comparisons\purchasing.json
 ```
 
-For private Azure, run this from a permitted network location and use the private app's HTTPS `/mcp` URL. The consumer uses an explicit MCP-resource-to-function adapter with Agent Framework/registered Foundry agents; it does not read the app's skill database. Its local SQLite database caches agent bindings only.
+For Azure, use the app's HTTPS `/mcp` URL from a permitted private-network location or an explicitly allowed public client IP, depending on the ingress mode. The consumer uses an explicit MCP-resource-to-function adapter with Agent Framework/registered Foundry agents; it does not read the app's skill database. Its local SQLite database caches agent bindings only.
 
 The baseline loads the explicitly pinned old release; the comparison run uses fresh discovery and the active release. Conversations are isolated, the question stays identical, and no active pointer is changed for the comparison. The report records real answers, MCP reads, exact loaded releases, model/agent version, and conversation IDs. It fails if the requested skill was not loaded or the active release has not changed. Optional `--expect-before` and `--expect-after` assert decision phrases, not exact answer wording. Review semantic correctness separately.
 
@@ -250,6 +249,6 @@ React + TypeScript + Vite frontend; FastAPI backend. SQLite is the local documen
 
 The Azure metadata adapter uses one workspace partition and a conditional workspace revision in each transactional batch. It pages through the workspace to apply shared registry rules; this favors correctness for a small demo, not large-catalog scale. Transactions are bounded below Cosmos limits (100 operations / approximately 2 MB). Runtime chat handles remain process-local: keep one worker and at most one ACA replica; conversations reset after restart.
 
-No vector database, background worker, multi-tenancy, authenticated user roles, or skill ACLs are included. Keep local binding on `127.0.0.1`; Azure requires the private networking described in [infra](infra/README.md). All permitted control-plane users can review/publish, and all permitted MCP callers can discover the published catalog. These are trusted demo boundaries, not complete enterprise governance.
+No vector database, background worker, multi-tenancy, authenticated user roles, or skill ACLs are included. Keep local binding on `127.0.0.1`; Azure uses the private data networking and internal or IP-restricted public app ingress described in [infra](infra/README.md). All permitted control-plane users can review/publish, and all permitted MCP callers can discover the published catalog. Public IP restrictions trust everyone behind an allowed egress address; they are not user authentication. These are trusted demo boundaries, not complete enterprise governance.
 
-No end-user Entra sign-in is required. Managed identities still use Entra for service-to-service access. Blob/Cosmos have public network access and key authentication disabled in the template. Actual MCAPS compliance requires review of applicable policies, topology, egress, access, and deployment evidence; this repository does not certify it. Use synthetic data only. Chat, SME notes, discovery metadata, and selected guidance are sent to the configured Foundry project during live runs.
+No end-user Entra sign-in is required. Managed identities still use Entra for service-to-service access. Blob/Cosmos have public network access and key authentication disabled in the template, and Foundry public network access is disabled. Actual MCAPS compliance requires review of applicable policies, topology, egress, access, and deployment evidence; this repository does not certify it. Use synthetic data only. Chat, SME notes, discovery metadata, and selected guidance are sent to the configured Foundry project during live runs.

@@ -1,21 +1,42 @@
 targetScope = 'resourceGroup'
 
-@description('New private deployment name. Do not reuse the existing public app name: ACA environment networking is immutable.')
+@description('Stable deployment name used by the app, network, identity and data resources. ACA environment networking is immutable.')
 @minLength(2)
 @maxLength(32)
 param appName string = 'enterprise-skills-private'
+@description('Managed environment name. Use a fresh name when Azure retains a deleted environment record.')
+param environmentName string = '${appName}-env'
 param location string = resourceGroup().location
 
-@description('Published, accessible application image. Prefer an immutable digest. No placeholder default.')
-param containerImage string
-@description('Existing function-calling deployment in the Foundry project.')
-@minLength(1)
-param modelDeployment string
+@description('Published application image. Defaults to the requested commit tag; an immutable digest can also be supplied.')
+param containerImage string = 'ghcr.io/rutzsco/enterprise-skills:sha-23fecf5'
+@description('Existing function-calling deployment. Empty keeps live AI explicitly unconfigured.')
+param modelDeployment string = ''
+@description('Provision network and data services without starting an app when registry credentials are unavailable.')
+param deployApplication bool = true
+param registryUsername string = ''
+@secure()
+param registryPassword string = ''
 param foundryName string = 'enterprise-skills-ai-${uniqueString(resourceGroup().id)}'
 param foundryProjectName string = 'enterprise-skills-project'
+param foundryLocation string = location
 param vnetAddressPrefix string = '10.42.0.0/16'
 param appSubnetPrefix string = '10.42.0.0/23'
 param endpointsSubnetPrefix string = '10.42.2.0/27'
+param appNetworkSecurityGroupId string = ''
+param endpointsNetworkSecurityGroupId string = ''
+
+@discriminator('mode')
+type ingressOptions = {
+  mode: 'Private'
+} | {
+  mode: 'Public'
+  @minLength(1)
+  allowedIpRanges: string[]
+}
+
+@description('Private ingress by default. Public HTTPS requires an explicit IPv4 CIDR allowlist; data services remain private.')
+param ingress ingressOptions = { mode: 'Private' }
 
 var suffix = uniqueString(resourceGroup().id, appName)
 var projectEndpoint = 'https://${foundryName}.services.ai.azure.com/api/projects/${foundryProjectName}'
@@ -34,6 +55,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
         name: 'apps'
         properties: {
           addressPrefix: appSubnetPrefix
+          networkSecurityGroup: empty(appNetworkSecurityGroupId) ? null : { id: appNetworkSecurityGroupId }
           delegations: [
             {
               name: 'container-apps'
@@ -46,6 +68,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
         name: 'endpoints'
         properties: {
           addressPrefix: endpointsSubnetPrefix
+          networkSecurityGroup: empty(endpointsNetworkSecurityGroupId) ? null : { id: endpointsNetworkSecurityGroupId }
           privateEndpointNetworkPolicies: 'Disabled'
         }
       }
@@ -63,14 +86,15 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = {
-  name: '${appName}-env'
+resource environment 'Microsoft.App/managedEnvironments@2025-07-01' = {
+  name: environmentName
   location: location
   tags: tags
   properties: {
+    publicNetworkAccess: ingress.mode == 'Public' ? 'Enabled' : 'Disabled'
     vnetConfiguration: {
       infrastructureSubnetId: vnet.properties.subnets[0].id
-      internal: true
+      internal: ingress.mode == 'Private'
     }
     appLogsConfiguration: {
       destination: 'log-analytics'
@@ -85,7 +109,7 @@ resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = {
   }
 }
 
-module appDns 'private-app-dns.bicep' = {
+module appDns 'private-app-dns.bicep' = if (ingress.mode == 'Private') {
   name: '${appName}-dns'
   params: {
     domain: environment.properties.defaultDomain
@@ -165,6 +189,7 @@ resource registry 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers
 var privateServices = [
   { name: 'blob', resourceId: storage.id, zone: 'privatelink.blob.${az.environment().suffixes.storage}', group: 'blob' }
   { name: 'cosmos', resourceId: cosmos.id, zone: 'privatelink.documents.azure.com', group: 'Sql' }
+  { name: 'foundry', resourceId: foundry.id, zone: 'privatelink.services.ai.azure.com', group: 'account' }
 ]
 resource zones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for service in privateServices: {
   name: service.zone
@@ -192,10 +217,51 @@ resource endpoints 'Microsoft.Network/privateEndpoints@2024-05-01' = [for servic
 resource zoneGroups 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = [for (service, i) in privateServices: {
   parent: endpoints[i]
   name: 'default'
-  properties: { privateDnsZoneConfigs: [ { name: service.name, properties: { privateDnsZoneId: zones[i].id } } ] }
+  properties: {
+    privateDnsZoneConfigs: concat(
+      [ { name: service.name, properties: { privateDnsZoneId: zones[i].id } } ],
+      service.name == 'foundry' ? [
+        { name: 'cognitive', properties: { privateDnsZoneId: cognitiveDns.id } }
+        { name: 'openai', properties: { privateDnsZoneId: openaiDns.id } }
+      ] : []
+    )
+  }
 }]
 
-resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = { name: foundryName }
+resource cognitiveDns 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: 'privatelink.cognitiveservices.azure.com'
+  location: 'global'
+}
+resource openaiDns 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: 'privatelink.openai.azure.com'
+  location: 'global'
+}
+resource cognitiveDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: cognitiveDns
+  name: '${appName}-link'
+  location: 'global'
+  properties: { registrationEnabled: false, virtualNetwork: { id: vnet.id } }
+}
+resource openaiDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: openaiDns
+  name: '${appName}-link'
+  location: 'global'
+  properties: { registrationEnabled: false, virtualNetwork: { id: vnet.id } }
+}
+resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
+  name: foundryName
+  location: foundryLocation
+  kind: 'AIServices'
+  tags: { application: 'enterprise-skills', managedBy: 'bicep' }
+  sku: { name: 'S0' }
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    allowProjectManagement: true
+    customSubDomainName: foundryName
+    disableLocalAuth: true
+    publicNetworkAccess: 'Disabled'
+  }
+}
 resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' existing = {
   parent: foundry
   name: foundryProjectName
@@ -216,6 +282,7 @@ resource blobAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 resource cosmosAccess 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2025-04-15' = {
   parent: cosmos
   name: guid(cosmos.id, identity.id, 'registry-data')
+  dependsOn: [registry]
   properties: {
     roleDefinitionId: '${cosmos.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
     principalId: identity.properties.principalId
@@ -223,16 +290,16 @@ resource cosmosAccess 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@
   }
 }
 resource foundryAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(project.id, identity.id, 'foundry')
+  name: guid(project.id, identity.id, 'foundry-runtime-data')
   scope: project
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '64702f94-c441-49e6-a78b-ef80e0188fee')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '19c28022-e58e-450d-a464-0b2a53034789')
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
 
-resource app 'Microsoft.App/containerApps@2025-01-01' = {
+resource app 'Microsoft.App/containerApps@2025-01-01' = if (deployApplication) {
   name: appName
   location: location
   tags: tags
@@ -246,8 +313,21 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
     workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
-      // External within the INTERNAL environment, reachable from the VNet, not the public internet.
-      ingress: { external: true, allowInsecure: false, targetPort: 8000, transport: 'auto' }
+      secrets: empty(registryPassword) ? [] : [ { name: 'ghcr-pull', value: registryPassword } ]
+      registries: empty(registryUsername) ? [] : [
+        { server: 'ghcr.io', username: registryUsername, passwordSecretRef: 'ghcr-pull' }
+      ]
+      ingress: {
+        external: true
+        allowInsecure: false
+        targetPort: 8000
+        transport: 'auto'
+        ipSecurityRestrictions: [for (range, index) in (ingress.mode == 'Public' ? ingress.allowedIpRanges : []): {
+          name: 'allowed-client-${index}'
+          action: 'Allow'
+          ipAddressRange: range
+        }]
+      }
     }
     template: {
       containers: [
@@ -260,7 +340,8 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'FOUNDRY_MODEL_DEPLOYMENT', value: modelDeployment }
             { name: 'FOUNDRY_AGENT_PREFIX', value: appName }
             { name: 'MEMORY_STORAGE_BACKEND', value: 'azure' }
-            { name: 'MEMORY_COSMOS_ENDPOINT', value: cosmos.properties.documentEndpoint }
+            // The published image expects the default HTTPS port to be implicit.
+            { name: 'MEMORY_COSMOS_ENDPOINT', value: replace(cosmos.properties.documentEndpoint, ':443/', '/') }
             { name: 'MEMORY_COSMOS_DATABASE', value: databaseName }
             { name: 'MEMORY_COSMOS_CONTAINER', value: containerName }
             { name: 'MEMORY_BLOB_ENDPOINT', value: storage.properties.primaryEndpoints.blob }
@@ -288,10 +369,18 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
   }
 }
 
-output containerAppUrl string = 'https://${app.properties.configuration.ingress.fqdn}'
+output containerAppUrl string = deployApplication ? 'https://${app!.properties.configuration.ingress.fqdn}' : ''
+output requestedContainerImage string = containerImage
+output applicationDeployed bool = deployApplication
+output ingressMode string = ingress.mode
+output allowedIngressIpRanges array = ingress.mode == 'Public' ? ingress.allowedIpRanges : []
+output managedEnvironmentId string = environment.id
+output managedIdentityId string = identity.id
+output managedIdentityClientId string = identity.properties.clientId
 output containerAppPrincipalId string = identity.properties.principalId
 output foundryProjectEndpoint string = projectEndpoint
 output privateVnetId string = vnet.id
 output storageAccountName string = storage.name
 output cosmosAccountName string = cosmos.name
 output privateAppDomain string = environment.properties.defaultDomain
+output containerAppDomain string = environment.properties.defaultDomain
